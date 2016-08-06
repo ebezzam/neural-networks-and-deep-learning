@@ -99,6 +99,9 @@ class Network(object):
         self.biases = [np.random.randn(y, 1) for y in self.sizes[1:]]
         self.weights = [np.random.randn(y, x)/np.sqrt(x)
                         for x, y in zip(self.sizes[:-1], self.sizes[1:])]
+		# Solution to momentum-based gradient descent: http://neuralnetworksanddeeplearning.com/chap3.html#problem_713937
+        self.velocity_biases = [np.zeros((y, 1)) for y in self.sizes[1:]]
+        self.velocity_weights = [np.zeros((y, x)) for x, y in zip(self.sizes[:-1], self.sizes[1:])]
 
     def large_weight_initializer(self):
         """Initialize the weights using a Gaussian distribution with mean 0
@@ -119,6 +122,8 @@ class Network(object):
         self.biases = [np.random.randn(y, 1) for y in self.sizes[1:]]
         self.weights = [np.random.randn(y, x)
                         for x, y in zip(self.sizes[:-1], self.sizes[1:])]
+		# Solution to momentum-based gradient descent: http://neuralnetworksanddeeplearning.com/chap3.html#problem_713937
+        self.velocity = [np.zeros((y, x)) for x, y in zip(self.sizes[:-1], self.sizes[1:])]
 
     def feedforward(self, a):
         """Return the output of the network if ``a`` is input."""
@@ -127,7 +132,7 @@ class Network(object):
         return a
 
     def SGD(self, training_data, epochs, mini_batch_size, eta,
-            lmbda = 0.0,
+            lmbda = 0.0, reg = 2, mu = 0.0,
             evaluation_data=None,
             monitor_evaluation_cost=False,
             monitor_evaluation_accuracy=False,
@@ -154,6 +159,11 @@ class Network(object):
         """
         if evaluation_data: n_data = len(evaluation_data)
         n = len(training_data)
+        if reg == 1:	# L1 regularization
+            self.reg = 1
+        else:			# L2 regularization
+            self.reg = 2
+        self.mu = mu    # momentum-based gradient descent coefficient
         evaluation_cost, evaluation_accuracy = [], []
         training_cost, training_accuracy = [], []
         for j in xrange(epochs):
@@ -195,16 +205,33 @@ class Network(object):
         ``n`` is the total size of the training data set.
 
         """
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-        for x, y in mini_batch:
-            delta_nabla_b, delta_nabla_w = self.backprop(x, y)
-            nabla_b = [nb+dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
-            nabla_w = [nw+dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
-        self.weights = [(1-eta*(lmbda/n))*w-(eta/len(mini_batch))*nw
-                        for w, nw in zip(self.weights, nabla_w)]
-        self.biases = [b-(eta/len(mini_batch))*nb
-                       for b, nb in zip(self.biases, nabla_b)]
+        # Solution to matrix-based approach: http://neuralnetworksanddeeplearning.com/chap2.html#problem_269962
+        X = np.transpose(np.squeeze([x[:,:] for x, y in mini_batch]))
+        Y = np.transpose(np.squeeze([y for x, y in mini_batch]))
+        nabla_b, nabla_w = self.backprop_matrix(X, Y)
+
+		# ORIGINAL
+        # nabla_b = [np.zeros(b.shape) for b in self.biases]
+        # nabla_w = [np.zeros(w.shape) for w in self.weights]
+        # for x, y in mini_batch:
+        #     delta_nabla_b, delta_nabla_w = self.backprop(x, y)
+        #     nabla_b = [nb+dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
+        #     nabla_w = [nw+dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
+
+        # Solution to momentum-based gradient descent: http://neuralnetworksanddeeplearning.com/chap3.html#problem_713937
+        self.velocity_weights = [self.mu*v - eta/len(mini_batch)*nw
+                        for v, nw in zip(self.velocity_weights, nabla_w)]
+        # Solution to L1 regularization: http://neuralnetworksanddeeplearning.com/chap3.html#problems_201277
+        if self.reg == 1:
+            self.weights = [w-eta*lmbda/n*np.sign(w) + v
+                        for w, v in zip(self.weights, self.velocity_weights)]
+        else:
+            self.weights = [(1-eta*(lmbda/n))*w + v
+                        for w, v in zip(self.weights, self.velocity_weights)]
+        # Solution to momentum-based gradient descent: http://neuralnetworksanddeeplearning.com/chap3.html#problem_713937
+        self.velocity_biases = [self.mu*v - (eta/len(mini_batch))*nb
+                        for v, nb in zip(self.velocity_biases, nabla_b)]
+        self.biases = [b + v for b, v in zip(self.biases, self.velocity_biases)]
 
     def backprop(self, x, y):
         """Return a tuple ``(nabla_b, nabla_w)`` representing the
@@ -238,6 +265,32 @@ class Network(object):
             delta = np.dot(self.weights[-l+1].transpose(), delta) * sp
             nabla_b[-l] = delta
             nabla_w[-l] = np.dot(delta, activations[-l-1].transpose())
+        return (nabla_b, nabla_w)
+
+    def backprop_matrix(self, X, Y):
+        """SOLUTION to matrix-based approach: http://neuralnetworksanddeeplearning.com/chap2.html#problem_269962
+        """
+        nabla_b = [np.zeros(b.shape) for b in self.biases]
+        nabla_w = [np.zeros(w.shape) for w in self.weights]
+        # feedforward
+        activation = X      # feature length X number of examples
+        activations = [X]   # activations, layer by layer
+        zs = [] # list to store all the z matrices, layer by layer
+        for b, w in zip(self.biases, self.weights):
+            Z = np.dot(w, activation)+b
+            zs.append(Z)
+            activation = sigmoid(Z)
+            activations.append(activation)
+        # backward pass
+        delta = (self.cost).delta(zs[-1], activations[-1], Y)
+        nabla_b[-1] = np.transpose(np.array(np.sum(delta,axis=1), ndmin=2))
+        nabla_w[-1] = np.dot(delta, activations[-2].transpose())
+        for k in xrange(2, self.num_layers):
+            z = zs[-k]
+            sp = sigmoid_prime(z)
+            delta = np.dot(self.weights[-k+1].transpose(), delta) * sp
+            nabla_b[-k] = np.transpose(np.array(np.sum(delta,axis=1), ndmin=2))
+            nabla_w[-k] = np.dot(delta, activations[-k-1].transpose())
         return (nabla_b, nabla_w)
 
     def accuracy(self, data, convert=False):

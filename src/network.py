@@ -71,12 +71,20 @@ class Network(object):
         gradient descent using backpropagation to a single mini batch.
         The ``mini_batch`` is a list of tuples ``(x, y)``, and ``eta``
         is the learning rate."""
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-        for x, y in mini_batch:
-            delta_nabla_b, delta_nabla_w = self.backprop(x, y)
-            nabla_b = [nb+dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
-            nabla_w = [nw+dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
+        
+        # Solution to matrix-based approach: http://neuralnetworksanddeeplearning.com/chap2.html#problem_269962
+        X = np.transpose(np.squeeze([x[:,:] for x, y in mini_batch]))
+        Y = np.transpose(np.squeeze([y for x, y in mini_batch]))
+        nabla_b, nabla_w = self.backprop_matrix(X, Y)
+
+        ## ORIGINAL
+        # nabla_b = [np.zeros(b.shape) for b in self.biases]
+        # nabla_w = [np.zeros(w.shape) for w in self.weights]
+        # for x, y in mini_batch:
+        #     delta_nabla_b, delta_nabla_w = self.backprop(x, y)
+        #     nabla_b = [nb+dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
+        #     nabla_w = [nw+dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
+
         self.weights = [w-(eta/len(mini_batch))*nw
                         for w, nw in zip(self.weights, nabla_w)]
         self.biases = [b-(eta/len(mini_batch))*nb
@@ -115,6 +123,33 @@ class Network(object):
             delta = np.dot(self.weights[-l+1].transpose(), delta) * sp
             nabla_b[-l] = delta
             nabla_w[-l] = np.dot(delta, activations[-l-1].transpose())
+        return (nabla_b, nabla_w)
+
+    def backprop_matrix(self, X, Y):
+        """Solution to matrix-based approach: http://neuralnetworksanddeeplearning.com/chap2.html#problem_26996
+        """
+        nabla_b = [np.zeros(b.shape) for b in self.biases]
+        nabla_w = [np.zeros(w.shape) for w in self.weights]
+        # feedforward
+        activation = X      # feature length X number of examples
+        activations = [X]   # activations, layer by layer
+        zs = [] # list to store all the z matrices, layer by layer
+        for b, w in zip(self.biases, self.weights):
+            Z = np.dot(w, activation)+b
+            zs.append(Z)
+            activation = sigmoid(Z)
+            activations.append(activation)
+        # backward pass
+        delta = self.cost_derivative(activations[-1], Y) * \
+            sigmoid_prime(zs[-1])
+        nabla_b[-1] = np.transpose(np.array(np.sum(delta,axis=1), ndmin=2))
+        nabla_w[-1] = np.dot(delta, activations[-2].transpose())
+        for k in xrange(2, self.num_layers):
+            z = zs[-k]
+            sp = sigmoid_prime(z)
+            delta = np.dot(self.weights[-k+1].transpose(), delta) * sp
+            nabla_b[-k] = np.transpose(np.array(np.sum(delta,axis=1), ndmin=2))
+            nabla_w[-k] = np.dot(delta, activations[-k-1].transpose())
         return (nabla_b, nabla_w)
 
     def evaluate(self, test_data):
